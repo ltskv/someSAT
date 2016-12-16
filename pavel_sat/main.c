@@ -34,32 +34,52 @@ struct variable {
     int_list* watched[2];
     int decision_level;
     int antecedent;
+    
+    int vsids;
 };
 
-//---GLOBALS---
+//-----------------
+//-----GLOBALS-----
+//-----------------
+
+//STORAGE FOR CLAUSES AND VARIABLES, PRIMARY DATA
 clause* clauses = NULL;
 variable* variables = NULL;
-int variable_count = 0;
+int num_variables = 0;
 int num_clauses = 0;
 
+//KEEP TRACK OF THE LEVEL'S ASSIGNMENTS TO PROPERLY BACKTRACK
 int** implications = NULL;
-int_list* unassigned_vars = NULL;
+
+//KEEP TRACK OF HOW MUCH VARIABLES ARE LEFT TO ASSIGN
+int unassigned_count = 0;
+
+//VSIDS GLOBALS
+int decay_counter = 0;
+int max_vsids_var = 0;
+
+//LIST OF CLAUSES OF SIZE ONE -> LEARNED ASSIGNMENTS
 int_list* size_one_clauses = NULL;
 
-
 //---DEBUGGING GLOBALS--
-int* tried[2];
+//int* tried[2];
 int num_assignments = 0;
 int num_first_uip_loops = 0;
+int top_vsids_hit = 0;
+int top_vsids_miss = 0;
+
+//------------------------
+//-----END OF GLOBALS-----
+//------------------------
 
 //---FUNCTION DECLARATIONS AND SHORT IMPLEMENTATIONS---
 int parse_cnf(const char* cnf_path);
-int decide(int variable_id, int decision_level);
+int decide(int decision_level);
 int assign(int variable_id, int decision_level, int assignment);
 void unassign(int decisionLevel);
 int replace_watched(int to_visit, int to_replace, int decision_level);
 clause* first_uip(clause* conflict_clause, int decision_level);
-void attach_clause(int to_attach, int_list** attach_to);
+void attach_int_to_list(int to_attach, int_list** attach_to);
 
 int index_of_element(int element, int* array, int start_index, int width) {
     for (int i = 0; i < width; i++) {
@@ -93,7 +113,6 @@ int num_vars_from_level (clause* clause, int decision_level) {
     return num_vars;
 }
 
-
 clause* resolve(clause* conflict, clause* antecedent, int res_var) {
     clause* resolvent = malloc(sizeof(clause));
     resolvent->literals = malloc(0);
@@ -124,6 +143,7 @@ clause* resolve(clause* conflict, clause* antecedent, int res_var) {
     return resolvent;
 }
 
+
 //----------------
 //------MAIN------
 //----------------
@@ -142,22 +162,27 @@ int main(int argc, const char * argv[]) {
     }
     
     //INIT GLOBALS
-    variables = (malloc(sizeof(variable) * (variable_count + 1)));
+    variables = (malloc(sizeof(variable) * (num_variables + 1)));
     implications = (malloc(sizeof(int*)));
     implications[0] = NULL;
+    unassigned_count = num_variables;
+    max_vsids_var = 1;
     
     //INIT GLOBALS FOR DEBUGGING
-    tried[0] = calloc(variable_count, sizeof(int));
-    tried[1] = calloc(variable_count, sizeof(int));
+    //tried[0] = calloc(variable_count, sizeof(int));
+    //tried[1] = calloc(variable_count, sizeof(int));
     
     //INITIALIZE ALL LITERALS TO DEFAULT
-    for (int i = 0; i <= variable_count; i++) {
+    for (int i = 0; i <= num_variables; i++) {
         variables[i].watched[0] = NULL;
         variables[i].watched[1] = NULL;
         variables[i].assignment = -1;
         variables[i].decision_level = -1;
         variables[i].antecedent = -1;
+        variables[i].vsids = 1;
     }
+    
+    
     
     size_one_clauses = NULL;
     
@@ -167,7 +192,7 @@ int main(int argc, const char * argv[]) {
         if (clauses[i].size == 1) {
             clauses[i].watched[0] = 0;
             clauses[i].watched[1] = 0;
-            attach_clause(i, &size_one_clauses);
+            attach_int_to_list(i, &size_one_clauses);
         }
         
         //SET WATCHED LITERALS
@@ -178,7 +203,7 @@ int main(int argc, const char * argv[]) {
                 int attachID = clauses[i].literals[watched_nr];
                 int posOrNeg = attachID > 0 ? 0 : 1;
                 attachID = abs(attachID);
-                attach_clause(i, &(variables[attachID].watched[posOrNeg]));
+                attach_int_to_list(i, &(variables[attachID].watched[posOrNeg]));
             }
         }
     }
@@ -189,22 +214,23 @@ int main(int argc, const char * argv[]) {
     //TRY SETTING ALL INITIAL VALUES (UNIT CLAUSES), IF FAILS THEN UNSAT
     //IF ANY ASSIGNMENT FAILED THEN RUN THROUGH THE LIST ERASING ELEMENTS
     //IF ALL LITERALS FROM UNIT CLAUSES COUDLD BE ASSIGNED, THEN PROCEED WITH SOLVING
-    int sat = decide(0, 0);
+    int sat = decide(0);
     
     ///DEGUGGING AND OPTIMIZATION INFORMATION
     printf("total number of assignment loops: %d\n", num_assignments);
     printf("total number of first uip loops: %d\n", num_first_uip_loops);
     printf("number of clauses at the end: %d\n", num_clauses);
-    printf("tried 0 for: ");
-    for (int i = 0; i < index_of_zero(tried[0]); i++) {
-        printf("%d ", tried[0][i]);
-    }
-    printf("\n");
-    printf("tried 1 for: ");
-    for (int i = 0; i < index_of_zero(tried[1]); i++) {
-        printf("%d ", tried[0][i]);
-    }
-    printf("\n");
+    printf("top vsids hit/miss: %d/%d\n", top_vsids_hit, top_vsids_miss);
+    /*printf("tried 0 for: ");
+     for (int i = 0; i < index_of_zero(tried[0]); i++) {
+     printf("%d ", tried[0][i]);
+     }
+     printf("\n");
+     printf("tried 1 for: ");
+     for (int i = 0; i < index_of_zero(tried[1]); i++) {
+     printf("%d ", tried[0][i]);
+     }
+     printf("\n");*/
     
     FILE* output_sat;
     
@@ -225,10 +251,14 @@ int main(int argc, const char * argv[]) {
     
     else output_sat = fopen(argv[2], "w");
     
-    if (!(sat > 0)) fprintf(output_sat, "s UNSATISFIABLE\n");
+    if (!sat) {
+        fprintf(output_sat, "s UNSATISFIABLE\n");
+        printf("UNSATISFIABLE\n");
+    }
     else {
+        printf("SATISFIABLE\n");
         fprintf(output_sat, "s SATISFIABLE\nv\n");
-        for (int i = 1; i <= variable_count; i++) {
+        for (int i = 1; i <= num_variables; i++) {
             int sign = variables[i].assignment == 0 ? -1 : 1;
             fprintf(output_sat, "%d 0\n", i * sign);
         }
@@ -245,6 +275,7 @@ int main(int argc, const char * argv[]) {
 //------END MAIN------
 //--------------------
 
+//PARSER
 int parse_cnf(const char* cnf_filepath) {
     
     FILE* cnf = fopen(cnf_filepath, "r");
@@ -252,7 +283,7 @@ int parse_cnf(const char* cnf_filepath) {
         fprintf(stderr, "PARSE ERROR: file not found!\n");
         return 0;
     }
-    variable_count = 0;
+    num_variables = 0;
     clauses = (malloc(0));
     
     int clause_count = 0;
@@ -292,7 +323,7 @@ int parse_cnf(const char* cnf_filepath) {
                 fprintf(stderr, "PARSE ERROR: unexpected char!\n");
                 return 0;
             }
-            if (abs(number) > variable_count) variable_count = abs(number);
+            if (abs(number) > num_variables) num_variables = abs(number);
             clause_literals = (realloc(clause_literals, (clause_size + 1) * sizeof(int)));
             clause_literals[clause_size] = number;
             clause_size++;
@@ -319,11 +350,11 @@ int parse_cnf(const char* cnf_filepath) {
     return clause_count;
 }
 
-int decide(int variable_id, int decision_level) {
+int decide(int decision_level) {
     
     //bottom of the problem is reached
     //clean up implications since no backtracking is necessary anymore
-    if (variable_id > variable_count) {
+    if (unassigned_count == 0) {
         for (int i = 0; i < decision_level; i++) {
             free(implications[i]);
             implications[i] = NULL;
@@ -331,12 +362,11 @@ int decide(int variable_id, int decision_level) {
         return 1;
     }
     
-    //this literal is already assigned, move decision to the next one
-    if (variables[variable_id].assignment >= 0) return decide(variable_id + 1, decision_level);
-    
     //UPDATE GLOBAL IMPLICATIONS STORAGE
     implications = (realloc(implications, (decision_level + 1) * sizeof(int*)));
     
+    //ON DECISION LEVEL 0 ASSIGN LITERALS FROM ONE-SIZED CLAUSES AND ASSIGNMENTS THAT WERE LEARNED AS A RESULT OF 1UIP
+    //THIS IS DONE IN A LOOP THAT GOES ON UNTIL THERE ARE NO VARIABLES TO ASSIGN
     if (decision_level == 0) {
         int sat = 1;
         do {
@@ -346,39 +376,86 @@ int decide(int variable_id, int decision_level) {
                     int to_assign = clauses[tmp->int_data].literals[0];
                     int assignID = abs(to_assign);
                     int assignment = to_assign > 0 ? 1 : 0;
-                    //printf("assigning %d @ 0\n", to_assign);
-                    sat = assign(assignID, 0, assignment);
+                    printf("assigning %d @ 0\n", to_assign);
+                    
+                    //THIS VARIABLE IS NOT ASSIGNED YET, ASSIGN
+                    if (variables[assignID].assignment == -1) sat = assign(assignID, 0, assignment);
+                    
+                    //THIS VARIABLE ALREADY HAS SATISFYING ASSIGNMENT
+                    else if (variables[assignID].assignment == assignment) sat = 1;
+                    
+                    //THIS VARIABLE ALREADY HAS CONFLICTING ASSIGNMENT,
+                    //SINCE IT IS LEVEL 0 NO CONFLICT IS ALLOWED HERE, WHICH MEANS UNSAT PROBLEM
+                    else sat = 0;
                 }
                 tmp = tmp->next;
                 free(size_one_clauses);
                 size_one_clauses = tmp;
             }
-            if (sat) sat = decide(1, 1);
+            
+            //IF ALL ASSIGNMENTS SUCCESSFUL, START SOLVING
+            if (sat) sat = decide(1);
         } while (size_one_clauses != NULL);
-        //printf("sat: %d\n", sat);
+        
         return sat;
     }
     
+    int variable_candidate = 0;
+    
+    //FIND VARIABLE WITH LARGEST VSIDS TO ASSIGN
+    if (variables[max_vsids_var].assignment == -1) {
+        variable_candidate = max_vsids_var;
+        top_vsids_hit++;
+    }
+    
+    else {
+        int top_vsids = 0;
+        for (int i = 1; i <= num_variables; i++) {
+            if (variables[i].assignment == -1 && variables[i].vsids > top_vsids) {
+                top_vsids = variables[i].vsids;
+                variable_candidate = i;
+            }
+        }
+        top_vsids_miss++;
+    }
+    
+    int variable_id = variable_candidate;
+    
+    if (variables[variable_id].assignment != -1) {
+        fprintf(stderr, "FAILED ASSERTION! ASSIGNING ALREADY ASSIGNED VARIABLE!\n");
+        exit(1);
+    }
+    
+    //printf("unassigned count: %d\n", unassigned_count);
+    //printf("gonna assign %d\n", variable_id);
+    //printf("existing assignment: %d\n", variables[variable_id].assignment);
+    
     //TRY ASSIGNING, IN CASE OF SUCCESS MOVE TO THE NEXT DECISION LEVEL
     for (int assignment = 0; assignment < 2; assignment++) {
-        if (index_of_element(variable_id, tried[assignment], 0, variable_count) < 0) {
-            tried[assignment][index_of_zero(tried[assignment])] = variable_id;
-        }
+        
         implications[decision_level] = (malloc(2 * sizeof(int)));
+        
+        //for performance and simplicity reasons the number of implications at current level
+        //is stored as a negative number at index 0 of implications array
         implications[decision_level][0] = -1;
         implications[decision_level][1] = variable_id;
         
+        //TRY ASSIGNING, IF SUCCESSFUL GO TO THE NEXT LEVEL
         int success = assign(variable_id, decision_level, assignment);
         //printf("@%d, var %2d, assign %d, success %d\n", decision_level, variable_id, assignment, success);
         
-        if (success > 0) success = decide(variable_id + 1, decision_level + 1);
+        if (success > 0) success = decide(decision_level + 1);
         if (success > 0) return 1;
         
+        //NOT SUCCESSFUL, DECIDE WHERE TO BACKTRACK
         unassign(decision_level);
         
+        //BACKTRACK TO HERE, TRY THIS ASSIGNMENT AGAIN, WITH NEW CONFLICT INFO
         if (success == VISIT_NONCHR_BACKTR) {
             assignment--;
         }
+        
+        //BACKTRACK FURTHER
         if (success < VISIT_NONCHR_BACKTR) {
             //printf("recently learned that: ");
             //print_clause(&clauses[num_clauses - 1]);
@@ -386,6 +463,7 @@ int decide(int variable_id, int decision_level) {
             return success + 1;
         }
     }
+    
     return 0;
 }
 
@@ -394,11 +472,14 @@ int decide(int variable_id, int decision_level) {
 //assignment: the corresponding decision/implication
 int assign(int variable_id, int decision_level, int assignment) {
     
-    //if (decision_level == 0) printf("assigning variable %d with %d\n", variable_id, assignment);
+    if (decision_level == 0) printf("assigning variable %d with %d\n", variable_id, assignment);
+    //printf("unassigned count: %d\n", unassigned_count);
+    //printf("gonna assign %d\n", variable_id);
     
     //ACTUALLY ASSIGN LITERAL
     variables[variable_id].assignment = assignment;
     variables[variable_id].decision_level = decision_level;
+    unassigned_count--;
     
     //TWO POINTERS FOR TRAVERSING LIST OF CLAUSES IN WHICH THE LITERAL IS WATCHED.
     //CLAUSES, WHERE THERE WAS FOUND ANOTHER LITERAL TO WATCH SHOULD BE REMOVED FROM THE LIST
@@ -451,13 +532,27 @@ int assign(int variable_id, int decision_level, int assignment) {
     return 1;
 }
 
+//NECESSARY CLEAN-UP FOR BACKTRACKING IS DONE HERE
 void unassign(int decision_level) {
+    
+    //PERIODICALLY DECAY VSIDS
+    if (decay_counter == 15) {
+        for (int i = 1; i <= num_variables; i++) {
+            variables[i].vsids /= 2;
+            variables[i].vsids++;
+        }
+        decay_counter = 0;
+    }
+    
+    //ERASE ASSIGNMENT
     for (int i = 1; i <= abs(implications[decision_level][0]); i++) {
         variables[implications[decision_level][i]].assignment = -1;
         variables[implications[decision_level][i]].decision_level = -1;
         variables[implications[decision_level][i]].antecedent = -1;
-        
+        unassigned_count++;
     }
+    
+    //CLEAR LIST OF THIS LEVEL ASSIGNMENTS
     free(implications[decision_level]);
     implications[decision_level] = NULL;
 }
@@ -469,7 +564,7 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     //find another unassigned literal to watch
     //if none, check if resolved
     //if not resolved, check if unit -> imply
-    //if not impliable -> CONFLICT backtrack
+    //if not impliable -> learn conflict clause -> CONFLICT backtrack
     
     //FIRST OF ALL, LOOK FOR ANOTHER LITERAL TO WATCH
     for (int i = 0; i < current->size; i++) {
@@ -490,7 +585,7 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
         //IF IT EITHER RESOLVES OR UNASSIGNED AND NOT ANOTHER WATCHED LITERAL, THEN WAS THE NORMAL CASE
         //AND WE FOUND OUR LITERAL TO WATCH
         if ((candidate_resolves || variables[candidateID].assignment < 0) && index_of_element(candidate, current->watched, 0, 2) < 0) {
-            attach_clause(to_visit, &(variables[candidateID].watched[watched_p_n]));
+            attach_int_to_list(to_visit, &(variables[candidateID].watched[watched_p_n]));
             current->watched[index_of_element(to_replace, current->watched, 0, 2)] = candidate;
             return VISIT_NORMAL;
         }
@@ -562,6 +657,8 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
         }
     }
     
+    //IT IS POSSIBLE THAT ALL VARIABLES EXCEPT FOR CURRENT LEVEL VARIABLE WERE PRE-ASSIGNED
+    //IN THIS CASE WE LEARNED NEW ASSIGNMENT (GO BACK TO LEVEL 1)
     if (max_exc_current == 0 && learned_clause->size > 1) {
         learned_clause->size = 1;
         free(learned_clause->literals);
@@ -569,35 +666,45 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
         learned_clause->literals[0] = this_level_var;
     }
     
-    int backtrack_levels = max_exc_current - decision_level;
-    
     if (learned_clause->size > 9) {
         free(learned_clause->literals);
         free(learned_clause);
         return VISIT_CONFLICT;
     }
     
+    int backtrack_levels = max_exc_current - decision_level;
+    
+    //INCREMENT VSIDS FOR VARIABLES IN NEW CLAUSE
+    decay_counter++;
+    for (int i = 0; i < learned_clause->size; i++) {
+        int var_to_increment = abs(learned_clause->literals[i]);
+        variables[var_to_increment].vsids++;
+        if (variables[var_to_increment].vsids > variables[max_vsids_var].vsids) max_vsids_var = var_to_increment;
+    }
+    
+    //ADD NEWLY LEARNED CLAUSE TO GLOBAL DATABASE
     clauses = realloc(clauses, (num_clauses + 1) * sizeof(clause));
     clauses[num_clauses] = *learned_clause;
     
     free(learned_clause);
     
+    //FINISH PROPER INITIALIZING OF THE CLAUSE
     if (clauses[num_clauses].size == 1) {
         clauses[num_clauses].watched[0] = 0;
         clauses[num_clauses].watched[1] = 0;
-        attach_clause(num_clauses, &size_one_clauses);
+        attach_int_to_list(num_clauses, &size_one_clauses);
     }
     else {
         int to_watch[2];
+        //most recently assigned variables should be watched to effectively utilize non-chronological backtrack
         to_watch[0] = this_level_var;
         to_watch[1] = latest_prev_var;
-        //printf("@%d: [0]: %d, [1]: %d\n", decision_level, this_level_var, latest_prev_var);
         for (int watched_nr = 0; watched_nr < 2; watched_nr++) {
             clauses[num_clauses].watched[watched_nr] = to_watch[watched_nr];
             int attachID = to_watch[watched_nr];
             int p_o_n = attachID > 0 ? 0 : 1;
             attachID = abs(attachID);
-            attach_clause(num_clauses, &(variables[attachID].watched[p_o_n]));
+            attach_int_to_list(num_clauses, &(variables[attachID].watched[p_o_n]));
         }
     }
     num_clauses++;
@@ -622,6 +729,7 @@ clause* first_uip(clause* conflict, int decision_level) {
     }
     
     while (num_vars_from_level(learn_result, decision_level) > 1) {
+        //FIND MOST RECENTLY ASSIGNED VARIABLE
         int most_recent = 0;
         for (int i = 0; i < learn_result->size; i++) {
             num_first_uip_loops++;
@@ -629,6 +737,7 @@ clause* first_uip(clause* conflict, int decision_level) {
             if (variables[candidate].decision_level != decision_level) continue;
             if (most_recent == 0 || index_of_element(candidate, implications[decision_level], 1, abs(implications[decision_level][0])) > index_of_element(abs(most_recent), implications[decision_level], 1, abs(implications[decision_level][0]))) most_recent = learn_result->literals[i];
         }
+        //RESOLVE NEW C AND THE VARIABLE's ANTECEDENT CLAUSE
         learn_result = resolve(learn_result, clauses + variables[abs(most_recent)].antecedent, most_recent);
     }
     return learn_result;
@@ -636,7 +745,7 @@ clause* first_uip(clause* conflict, int decision_level) {
 
 //variable_id: variable to attache clause to
 //posOrNeg: whether to attach to watched pos or neg, 0 for pos, 1 for neg
-void attach_clause(int to_attach, int_list** attach_to) {
+void attach_int_to_list(int to_attach, int_list** attach_to) {
     int_list* new_list_el = (malloc(sizeof(int_list)));
     new_list_el->int_data = to_attach;
     new_list_el->next = NULL;
