@@ -76,21 +76,15 @@ int top_vsids_miss = 0;
 int parse_cnf(const char* cnf_path);
 int decide(int decision_level);
 int assign(int variable_id, int decision_level, int assignment);
-void unassign(int decisionLevel);
+void unassign(int decision_level);
 int replace_watched(int to_visit, int to_replace, int decision_level);
 clause* first_uip(clause* conflict_clause, int decision_level);
-void attach_int_to_list(int to_attach, int_list** attach_to);
-
-int index_of_element(int element, int* array, int start_index, int width) {
-    for (int i = 0; i < width; i++) {
-        if (array[i + start_index] == element) return i;
-    }
-    return -1;
-}
+clause* resolve(clause* conflict, clause* antecedent, int res_var);
+void attach_int_to_list(int data, int_list** attach_to);
 
 
-//This function was used for debugging purposes
 
+//This function is used for debugging purposes
 void print_clause(clause* clause) {
     for (int i = 0; i < clause->size; i++) printf("|v%d:a%d:p%d@%d ", clause->literals[i], variables[abs(clause->literals[i])].assignment, variables[abs(clause->literals[i])].antecedent, variables[abs(clause->literals[i])].decision_level);
     printf("\n");
@@ -105,42 +99,22 @@ int index_of_zero(int* zt_array) {
     return index;
 }
 
+//FIND INDEX OF ELEMENT IN PORTION OF ARRAY STARTING ON start_index AND WITH SIZE width
+//RETURN -1 IF NOT FOUND
+int index_of_element(int element, int* array, int start_index, int width) {
+    for (int i = 0; i < width; i++) {
+        if (array[i + start_index] == element) return i;
+    }
+    return -1;
+}
+
+//RETURN NUMBER OF VARIABLES IN CLAUSE FROM CURRENT DECISION LEVEL
 int num_vars_from_level (clause* clause, int decision_level) {
     int num_vars = 0;
     for (int i = 0; i < clause->size; i++) {
         if (variables[abs(clause->literals[i])].decision_level == decision_level) num_vars++;
     }
     return num_vars;
-}
-
-clause* resolve(clause* conflict, clause* antecedent, int res_var) {
-    clause* resolvent = malloc(sizeof(clause));
-    resolvent->literals = malloc(0);
-    
-    int resolvent_size = 0;
-    
-    //ADD LITERALS FROM INITIATOR CLAUSE TO RESOLVING
-    for (int i = 0; i < conflict->size; i++) {
-        //this literal is valid to be in resolvent
-        if (conflict->literals[i] != res_var) {
-            resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
-            resolvent->literals[resolvent_size] = conflict->literals[i];
-            resolvent_size++;
-        }
-    }
-    //ADD LITERALS FROM ANTECEDENT CLAUSE TO RESOLVING
-    for (int i = 0; i < antecedent->size; i++) {
-        if (antecedent->literals[i] != -res_var && index_of_element(antecedent->literals[i], resolvent->literals, 0, resolvent_size) < 0) {
-            resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
-            resolvent->literals[resolvent_size] = antecedent->literals[i];
-            resolvent_size++;
-        }
-    }
-    resolvent->size = resolvent_size;
-    free(conflict->literals);
-    free(conflict);
-    
-    return resolvent;
 }
 
 
@@ -738,25 +712,61 @@ clause* first_uip(clause* conflict, int decision_level) {
             if (most_recent == 0 || index_of_element(candidate, implications[decision_level], 1, abs(implications[decision_level][0])) > index_of_element(abs(most_recent), implications[decision_level], 1, abs(implications[decision_level][0]))) most_recent = learn_result->literals[i];
         }
         //RESOLVE NEW C AND THE VARIABLE's ANTECEDENT CLAUSE
-        learn_result = resolve(learn_result, clauses + variables[abs(most_recent)].antecedent, most_recent);
+        clause* resolvent = resolve(learn_result, clauses + variables[abs(most_recent)].antecedent, most_recent);
+        free(learn_result->literals);
+        free(learn_result);
+        learn_result = resolvent;
     }
     return learn_result;
 }
 
-//variable_id: variable to attache clause to
-//posOrNeg: whether to attach to watched pos or neg, 0 for pos, 1 for neg
-void attach_int_to_list(int to_attach, int_list** attach_to) {
+//THIS FUNCTION IMPLEMENTS RESOLUTION (a + b)(a' + c) = (a + b)(a' + c)(b + c)
+//AND RETURNS POINTER TO (b + c)
+clause* resolve(clause* conflict, clause* antecedent, int res_var) {
+    clause* resolvent = malloc(sizeof(clause));
+    resolvent->literals = malloc(0);
+    
+    int resolvent_size = 0;
+    
+    //ADD LITERALS FROM INITIATOR CLAUSE TO RESOLVING
+    for (int i = 0; i < conflict->size; i++) {
+        //this literal is valid to be in resolvent
+        if (conflict->literals[i] != res_var) {
+            resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
+            resolvent->literals[resolvent_size] = conflict->literals[i];
+            resolvent_size++;
+        }
+    }
+    //ADD LITERALS FROM ANTECEDENT CLAUSE TO RESOLVING
+    for (int i = 0; i < antecedent->size; i++) {
+        if (antecedent->literals[i] != -res_var && index_of_element(antecedent->literals[i], resolvent->literals, 0, resolvent_size) < 0) {
+            resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
+            resolvent->literals[resolvent_size] = antecedent->literals[i];
+            resolvent_size++;
+        }
+    }
+    resolvent->size = resolvent_size;
+    return resolvent;
+}
+
+//THIS FUNCTION IS USED TO CREATE AN INSTANCE OF STRUCT int_list WITH data AS IT'S int_data
+//AND ATTACH IT TO A LIST, POINTED BY attach_to
+void attach_int_to_list(int data, int_list** attach_to) {
+    
     int_list* new_list_el = (malloc(sizeof(int_list)));
-    new_list_el->int_data = to_attach;
+    new_list_el->int_data = data;
     new_list_el->next = NULL;
     
+    //ATTACH TO IS THE HEAD OF THE LIST
     int_list* tmp = *attach_to;
     
+    //IF HEAD IS NULL MAKE NEW ELEMENT A HEAD
     if (tmp == NULL) {
         *attach_to = new_list_el;
         return;
     }
     
+    //ELSE FIND TAIL AND HANG IT THERE
     while (tmp->next != NULL) {
         tmp = tmp->next;
     }
