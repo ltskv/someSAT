@@ -14,10 +14,6 @@ typedef struct variable variable;
 #define VISIT_NORMAL 1
 #define VISIT_RESOLVED 2
 
-//---FINE TUNING FOR VSIDS CACHE
-
-#define K_VSIDS_CACHE_SIZE 10
-
 //---DATA STRUCTURES---
 
 struct clause {
@@ -61,19 +57,14 @@ int** implications = NULL;
 int unassigned_count = 0;
 
 //VSIDS GLOBALS
-int max_vsids_cache[K_VSIDS_CACHE_SIZE + 1];
 int decay_counter = 0;
-int max_vsids_var = 0;
 
 //LIST OF CLAUSES OF SIZE ONE -> LEARNED ASSIGNMENTS
 int_list* size_one_clauses = NULL;
 
 //---DEBUGGING GLOBALS--
-//int* tried[2];
-int num_assignments = 0;
-int num_first_uip_loops = 0;
-int top_vsids_hit = 0;
-int top_vsids_miss = 0;
+int num_learned = 0;
+int num_branching = 0;
 
 //------------------------
 //-----END OF GLOBALS-----
@@ -91,7 +82,7 @@ void attach_int_to_list(int data, int_list** attach_to);
 
 
 
-//This function is used for debugging purposes
+//This function may be used for debugging purposes
 void print_clause(clause* clause) {
     for (int i = 0; i < clause->size; i++) printf("|v%d:a%d:p%d@%d ", clause->literals[i], variables[abs(clause->literals[i])].assignment, variables[abs(clause->literals[i])].antecedent, variables[abs(clause->literals[i])].decision_level);
     printf("\n");
@@ -102,7 +93,7 @@ void print_clause(clause* clause) {
 //the function determines position of zero in array -> array's size
 int index_of_zero(int* zt_array) {
     int index;
-    for (index = 0; zt_array[index] != 0; index++) num_first_uip_loops++;
+    for (index = 0; zt_array[index] != 0; index++);
     return index;
 }
 
@@ -147,14 +138,9 @@ int main(int argc, const char * argv[]) {
     implications = (malloc(sizeof(int*)));
     implications[0] = NULL;
     unassigned_count = num_variables;
-    max_vsids_var = 1;
-    for (int i = 0; i < K_VSIDS_CACHE_SIZE + 1; i++) {
-        max_vsids_cache[i] = 1;
-    }
-    
+
     //INIT GLOBALS FOR DEBUGGING
-    //tried[0] = calloc(variable_count, sizeof(int));
-    //tried[1] = calloc(variable_count, sizeof(int));
+
     
     //INITIALIZE ALL LITERALS TO DEFAULT
     for (int i = 0; i <= num_variables; i++) {
@@ -166,8 +152,6 @@ int main(int argc, const char * argv[]) {
         variables[i].position_in_level = -1;
         variables[i].vsids = 0;
     }
-    
-    
     
     size_one_clauses = NULL;
     
@@ -202,20 +186,8 @@ int main(int argc, const char * argv[]) {
     int sat = decide(0);
     
     ///DEGUGGING AND OPTIMIZATION INFORMATION
-    printf("total number of assignment loops: %d\n", num_assignments);
-    printf("total number of first uip loops: %d\n", num_first_uip_loops);
-    printf("number of clauses at the end: %d\n", num_clauses);
-    printf("top vsids hit/miss: %d/%d\n", top_vsids_hit, top_vsids_miss);
-    /*printf("tried 0 for: ");
-     for (int i = 0; i < index_of_zero(tried[0]); i++) {
-     printf("%d ", tried[0][i]);
-     }
-     printf("\n");
-     printf("tried 1 for: ");
-     for (int i = 0; i < index_of_zero(tried[1]); i++) {
-     printf("%d ", tried[0][i]);
-     }
-     printf("\n");*/
+    printf("clauses learned: %d\n", num_learned);
+    printf("branching decisions: %d\n", num_branching);
     
     FILE* output_sat;
     
@@ -242,10 +214,10 @@ int main(int argc, const char * argv[]) {
     }
     else {
         printf("SATISFIABLE\n");
-        fprintf(output_sat, "s SATISFIABLE\nv\n");
+        fprintf(output_sat, "s SATISFIABLE\nv ");
         for (int i = 1; i <= num_variables; i++) {
             int sign = variables[i].assignment == 0 ? -1 : 1;
-            fprintf(output_sat, "%d 0\n", i * sign);
+            fprintf(output_sat, "%d ", i * sign);
         }
         fprintf(output_sat, "0\n");
     }
@@ -361,7 +333,6 @@ int decide(int decision_level) {
                     int to_assign = clauses[tmp->int_data].literals[0];
                     int assignID = abs(to_assign);
                     int assignment = to_assign > 0 ? 1 : 0;
-                    printf("assigning %d @ 0\n", to_assign);
                     
                     //THIS VARIABLE IS NOT ASSIGNED YET, ASSIGN
                     if (variables[assignID].assignment == -1) sat = assign(assignID, 0, assignment);
@@ -389,30 +360,13 @@ int decide(int decision_level) {
     //FIND VARIABLE WITH LARGEST VSIDS TO ASSIGN
     int variable_candidate = 0;
     
-    /*for (int i = 1; i <= K_VSIDS_CACHE_SIZE; i++) {
-        printf("%d ", max_vsids_cache[i]);
-    }
-    printf("\n");*/
-    
-    /*int top_vsids = 0;
-    
-    for (int i = 1; i <= K_VSIDS_CACHE_SIZE; i++) {
-        if (variables[max_vsids_cache[i]].assignment == -1 && variables[max_vsids_cache[i]].vsids > top_vsids) {
-            top_vsids = variables[max_vsids_cache[i]].vsids;
-            variable_candidate = max_vsids_cache[i];
+    int top_vsids = -1;
+    for (int i = 1; i <= num_variables; i++) {
+        if (variables[i].assignment == -1 && variables[i].vsids > top_vsids) {
+            top_vsids = variables[i].vsids;
+            variable_candidate = i;
         }
     }
-
-    if (variable_candidate == 0) { */
-        int top_vsids = -1;
-        for (int i = 1; i <= num_variables; i++) {
-            if (variables[i].assignment == -1 && variables[i].vsids > top_vsids) {
-                top_vsids = variables[i].vsids;
-                variable_candidate = i;
-            }
-        }
-        top_vsids_miss++;
-    //}
     
     int variable_id = variable_candidate;
     
@@ -421,12 +375,9 @@ int decide(int decision_level) {
         exit(1);
     }
     
-    //printf("unassigned count: %d\n", unassigned_count);
-    //printf("gonna assign %d\n", variable_id);
-    //printf("existing assignment: %d\n", variables[variable_id].assignment);
-    
     //TRY ASSIGNING, IN CASE OF SUCCESS MOVE TO THE NEXT DECISION LEVEL
     for (int assignment = 0; assignment < 2; assignment++) {
+        num_branching++;
         
         implications[decision_level] = (malloc(2 * sizeof(int)));
         
@@ -437,7 +388,6 @@ int decide(int decision_level) {
         
         //TRY ASSIGNING, IF SUCCESSFUL GO TO THE NEXT LEVEL
         int success = assign(variable_id, decision_level, assignment);
-        //printf("@%d, var %2d, assign %d, success %d\n", decision_level, variable_id, assignment, success);
         
         if (success > 0) success = decide(decision_level + 1);
         if (success > 0) return 1;
@@ -452,9 +402,6 @@ int decide(int decision_level) {
         
         //BACKTRACK FURTHER
         if (success < VISIT_NONCHR_BACKTR) {
-            //printf("recently learned that: ");
-            //print_clause(&clauses[num_clauses - 1]);
-            //printf("\n");
             return success + 1;
         }
     }
@@ -462,10 +409,8 @@ int decide(int decision_level) {
     return 0;
 }
 
-//literalID: literal being processed
-//decisionLevel: (nuff said)
-//assignment: the corresponding decision/implication
 int assign(int variable_id, int decision_level, int assignment) {
+    
     //ACTUALLY ASSIGN LITERAL
     variables[variable_id].assignment = assignment;
     variables[variable_id].decision_level = decision_level;
@@ -485,7 +430,6 @@ int assign(int variable_id, int decision_level, int assignment) {
     int sign = 1 - assignment * 2;
     
     while (to_update != NULL) {
-        num_assignments++;
         //TRY FINDING IN EACH CLAUSE ANOTHER LITERAL TO WATCH
         int result = replace_watched(to_update->int_data, variable_id * sign, decision_level);
         
@@ -551,8 +495,6 @@ void unassign(int decision_level) {
 //toReplace: literal being replaced as watched, contains information whether watched pos or neg
 int replace_watched(int to_visit, int to_replace, int decision_level) {
     
-    //printf("visit clause: %d\n", to_visit);
-    
     clause* current = clauses + to_visit;
     //find another unassigned literal to watch
     //if none, check if resolved
@@ -584,9 +526,6 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
         }
     }
     
-    //if (decision_level == 0) printf("no replacement found, probably conflict!\n");
-    
-    
     //NOW LET'S HAVE A LOOK AT THE OTHER WATCHED LITERAL
     //aw FOR anotherWatched
     int aw = current->watched[1 - index_of_element(to_replace, current->watched, 0, 2)];
@@ -600,19 +539,20 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     //ELSE PROPAGATE THE CONFLICT
     
     if (variables[awID].assignment < 0) {
-        //determine how many implications were already done on this level (0 marks the end)
+        //determine how many implications were already done on this (the 0th element holds negative size)
         int implications_size = abs(implications[decision_level][0]);
         
-        //then resize the stuff appropriately and mark the end with zero
+        //then resize the stuff appropriately
         implications_size++;
         implications[decision_level] = (realloc(implications[decision_level], (implications_size + 1) * sizeof(int)));
         
         //set the last implication to awID, which underwent implication
         implications[decision_level][implications_size] = awID;
         
-        //then resize the stuff appropriately and mark the end with zero
+        //then update 0th element to hold new size
         implications[decision_level][0] = -implications_size;
         
+        //mark this clause as antecedent for this variable
         variables[awID].antecedent = to_visit;
         
         int implication_success = assign(awID, decision_level, aw_resolving_assignment);
@@ -625,12 +565,6 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     if (decision_level == 0) return VISIT_CONFLICT;
     
     clause* learned_clause = first_uip(clauses + to_visit, decision_level);
-    //printf("\nlearned: ");
-    //print_clause(learned_clause);
-    
-    if (learned_clause == clauses + to_visit) {
-        return VISIT_CONFLICT;
-    }
     
     //FIND OUT SECOND LATEST DECISION LEVEL IN A LEARNED CLAUSE TO BACKTRACK TO
     //IF NOT FOUND, THEN LEARNED CLAUSE IS UNIT, RETURN TO LEVEL ZERO AND ASSIGN
@@ -672,13 +606,10 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     for (int i = 0; i < learned_clause->size; i++) {
         int var_to_increment = abs(learned_clause->literals[i]);
         variables[var_to_increment].vsids++;
-        /*int vsids_to_replace = max_vsids_cache[max_vsids_cache[0]];
-        if (variables[var_to_increment].vsids > variables[vsids_to_replace].vsids && index_of_element(var_to_increment, max_vsids_cache, 1, K_VSIDS_CACHE_SIZE) < 0) {
-            max_vsids_cache[max_vsids_cache[0]] = var_to_increment;
-            max_vsids_cache[0] = (max_vsids_cache[0] % K_VSIDS_CACHE_SIZE) + 1;
-        }*/
     }
+    
     //ADD NEWLY LEARNED CLAUSE TO GLOBAL DATABASE
+    num_learned++;
     clauses = realloc(clauses, (num_clauses + 1) * sizeof(clause));
     clauses[num_clauses] = *learned_clause;
     
@@ -724,11 +655,13 @@ clause* first_uip(clause* conflict, int decision_level) {
         learn_result->literals[i] = conflict->literals[i];
     }
     
+    //nullify incoming clause pointer in order to not mess it up
+    conflict = NULL;
+    
     while (num_vars_from_level(learn_result, decision_level) > 1) {
         //FIND MOST RECENTLY ASSIGNED VARIABLE
         int most_recent = 0;
         for (int i = 0; i < learn_result->size; i++) {
-            num_first_uip_loops++;
             int candidate = abs(learn_result->literals[i]);
             if (variables[candidate].decision_level != decision_level) continue;
             if (most_recent == 0 || variables[candidate].position_in_level > variables[abs(most_recent)].position_in_level) most_recent = learn_result->literals[i];
