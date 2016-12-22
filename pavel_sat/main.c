@@ -14,6 +14,10 @@ typedef struct variable variable;
 #define VISIT_NORMAL 1
 #define VISIT_RESOLVED 2
 
+//---FINE TUNING FOR VSIDS CACHE
+
+#define K_VSIDS_CACHE_SIZE 10
+
 //---DATA STRUCTURES---
 
 struct clause {
@@ -32,8 +36,10 @@ struct int_list {
 struct variable {
     int assignment;
     int_list* watched[2];
-    int decision_level;
     int antecedent;
+
+    int decision_level;
+    int position_in_level;
     
     int vsids;
 };
@@ -55,6 +61,7 @@ int** implications = NULL;
 int unassigned_count = 0;
 
 //VSIDS GLOBALS
+int max_vsids_cache[K_VSIDS_CACHE_SIZE + 1];
 int decay_counter = 0;
 int max_vsids_var = 0;
 
@@ -141,6 +148,9 @@ int main(int argc, const char * argv[]) {
     implications[0] = NULL;
     unassigned_count = num_variables;
     max_vsids_var = 1;
+    for (int i = 0; i < K_VSIDS_CACHE_SIZE + 1; i++) {
+        max_vsids_cache[i] = 1;
+    }
     
     //INIT GLOBALS FOR DEBUGGING
     //tried[0] = calloc(variable_count, sizeof(int));
@@ -153,7 +163,8 @@ int main(int argc, const char * argv[]) {
         variables[i].assignment = -1;
         variables[i].decision_level = -1;
         variables[i].antecedent = -1;
-        variables[i].vsids = 1;
+        variables[i].position_in_level = -1;
+        variables[i].vsids = 0;
     }
     
     
@@ -304,7 +315,7 @@ int parse_cnf(const char* cnf_filepath) {
             word = strtok(NULL, sep);
         }
         
-        if (clause_size && end_of_clause) {
+        if (clause_size > 0 && end_of_clause) {
             clauses = (realloc(clauses, (clause_count + 1) * sizeof(clause)));
             clauses[clause_count].literals = clause_literals;
             clauses[clause_count].size = clause_size;
@@ -374,16 +385,26 @@ int decide(int decision_level) {
         return sat;
     }
     
-    int variable_candidate = 0;
     
     //FIND VARIABLE WITH LARGEST VSIDS TO ASSIGN
-    if (variables[max_vsids_var].assignment == -1) {
-        variable_candidate = max_vsids_var;
-        top_vsids_hit++;
-    }
+    int variable_candidate = 0;
     
-    else {
-        int top_vsids = 0;
+    /*for (int i = 1; i <= K_VSIDS_CACHE_SIZE; i++) {
+        printf("%d ", max_vsids_cache[i]);
+    }
+    printf("\n");*/
+    
+    /*int top_vsids = 0;
+    
+    for (int i = 1; i <= K_VSIDS_CACHE_SIZE; i++) {
+        if (variables[max_vsids_cache[i]].assignment == -1 && variables[max_vsids_cache[i]].vsids > top_vsids) {
+            top_vsids = variables[max_vsids_cache[i]].vsids;
+            variable_candidate = max_vsids_cache[i];
+        }
+    }
+
+    if (variable_candidate == 0) { */
+        int top_vsids = -1;
         for (int i = 1; i <= num_variables; i++) {
             if (variables[i].assignment == -1 && variables[i].vsids > top_vsids) {
                 top_vsids = variables[i].vsids;
@@ -391,7 +412,7 @@ int decide(int decision_level) {
             }
         }
         top_vsids_miss++;
-    }
+    //}
     
     int variable_id = variable_candidate;
     
@@ -445,14 +466,10 @@ int decide(int decision_level) {
 //decisionLevel: (nuff said)
 //assignment: the corresponding decision/implication
 int assign(int variable_id, int decision_level, int assignment) {
-    
-    if (decision_level == 0) printf("assigning variable %d with %d\n", variable_id, assignment);
-    //printf("unassigned count: %d\n", unassigned_count);
-    //printf("gonna assign %d\n", variable_id);
-    
     //ACTUALLY ASSIGN LITERAL
     variables[variable_id].assignment = assignment;
     variables[variable_id].decision_level = decision_level;
+    variables[variable_id].position_in_level = abs(implications[decision_level][0]) - 1;
     unassigned_count--;
     
     //TWO POINTERS FOR TRAVERSING LIST OF CLAUSES IN WHICH THE LITERAL IS WATCHED.
@@ -510,10 +527,9 @@ int assign(int variable_id, int decision_level, int assignment) {
 void unassign(int decision_level) {
     
     //PERIODICALLY DECAY VSIDS
-    if (decay_counter == 15) {
+    if (decay_counter == 12) {
         for (int i = 1; i <= num_variables; i++) {
             variables[i].vsids /= 2;
-            variables[i].vsids++;
         }
         decay_counter = 0;
     }
@@ -523,6 +539,7 @@ void unassign(int decision_level) {
         variables[implications[decision_level][i]].assignment = -1;
         variables[implications[decision_level][i]].decision_level = -1;
         variables[implications[decision_level][i]].antecedent = -1;
+        variables[implications[decision_level][i]].position_in_level = -1;
         unassigned_count++;
     }
     
@@ -533,6 +550,8 @@ void unassign(int decision_level) {
 
 //toReplace: literal being replaced as watched, contains information whether watched pos or neg
 int replace_watched(int to_visit, int to_replace, int decision_level) {
+    
+    //printf("visit clause: %d\n", to_visit);
     
     clause* current = clauses + to_visit;
     //find another unassigned literal to watch
@@ -653,9 +672,12 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     for (int i = 0; i < learned_clause->size; i++) {
         int var_to_increment = abs(learned_clause->literals[i]);
         variables[var_to_increment].vsids++;
-        if (variables[var_to_increment].vsids > variables[max_vsids_var].vsids) max_vsids_var = var_to_increment;
+        /*int vsids_to_replace = max_vsids_cache[max_vsids_cache[0]];
+        if (variables[var_to_increment].vsids > variables[vsids_to_replace].vsids && index_of_element(var_to_increment, max_vsids_cache, 1, K_VSIDS_CACHE_SIZE) < 0) {
+            max_vsids_cache[max_vsids_cache[0]] = var_to_increment;
+            max_vsids_cache[0] = (max_vsids_cache[0] % K_VSIDS_CACHE_SIZE) + 1;
+        }*/
     }
-    
     //ADD NEWLY LEARNED CLAUSE TO GLOBAL DATABASE
     clauses = realloc(clauses, (num_clauses + 1) * sizeof(clause));
     clauses[num_clauses] = *learned_clause;
@@ -709,7 +731,7 @@ clause* first_uip(clause* conflict, int decision_level) {
             num_first_uip_loops++;
             int candidate = abs(learn_result->literals[i]);
             if (variables[candidate].decision_level != decision_level) continue;
-            if (most_recent == 0 || index_of_element(candidate, implications[decision_level], 1, abs(implications[decision_level][0])) > index_of_element(abs(most_recent), implications[decision_level], 1, abs(implications[decision_level][0]))) most_recent = learn_result->literals[i];
+            if (most_recent == 0 || variables[candidate].position_in_level > variables[abs(most_recent)].position_in_level) most_recent = learn_result->literals[i];
         }
         //RESOLVE NEW C AND THE VARIABLE's ANTECEDENT CLAUSE
         clause* resolvent = resolve(learn_result, clauses + variables[abs(most_recent)].antecedent, most_recent);
