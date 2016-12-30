@@ -70,29 +70,41 @@ int num_branching = 0;
 //------------------------
 
 //---FUNCTION DECLARATIONS AND SHORT IMPLEMENTATIONS---
+
+//PARSER
 int parse_cnf(const char* cnf_path);
+
+//DPLL
 int decide(int decision_level);
 int assign(int variable_id, int decision_level, int assignment);
 void unassign(int decision_level);
+
+//2-LITERAL WATCHING
 int replace_watched(int to_visit, int to_replace, int decision_level);
+
+//1UIP AND NONCHRONOLOGICAL BACKTRACKING
 clause* first_uip(clause* conflict_clause, int decision_level);
-clause* resolve(clause* conflict, clause* antecedent, int res_var);
-void attach_int_to_list(int data, int_list** attach_to);
+clause* resolve(clause* first, clause* second, int res_var);
+
+//PREPROCESSOR
 int* simplify();
 int* self_subsume(int clause_id, int** occurences_pos, int** occurences_neg, int** ptr_touched);
 int* subsume(int clause_id, int** occurences_pos, int** occurences_neg, int** ptr_touched);
+int* maybe_eliminate(int var, int** occurences_pos, int** occurences_neg, int** ptr_touched, int** ptr_added);
+
+//SERVICE FUNCTIONS
+void attach_int_to_list(int data, int_list** attach_to);
 
 
-
-//This function may be used for debugging purposes
+//This function may be used and modified for debugging purposes
 void print_clause(clause* clause) {
     for (int i = 0; i < clause->size; i++) printf("|v%d:a%d:p%d@%d ", clause->literals[i], variables[abs(clause->literals[i])].assignment, variables[abs(clause->literals[i])].antecedent, variables[abs(clause->literals[i])].decision_level);
     printf("\n");
 }
 
 
-//zt_array - zero terminated array (MUST BE ZERO TERMINATED OR ELSE SEGMENTATION FAULT)
-//the function determines position of zero in array -> array's size
+//zt_array - zero terminated array (MUST CONTAIN ZERO OR ELSE SEGMENTATION FAULT, DANGEROUS)
+//the function determines position of zero in array -> array's size -> deprecated, actually, use array[0] to contain size instead
 int index_of_zero(int* zt_array) {
     int index;
     for (index = 0; zt_array[index] != 0; index++);
@@ -102,9 +114,8 @@ int index_of_zero(int* zt_array) {
 //FIND INDEX OF ELEMENT IN PORTION OF ARRAY STARTING ON start_index AND WITH SIZE width
 //RETURN -1 IF NOT FOUND
 int index_of_element(int element, int* array, int start_index, int width) {
-    for (int i = 0; i < width; i++) {
-        if (array[i + start_index] == element) return i;
-    }
+    for (int i = 0; i < width; i++) if (array[i + start_index] == element) return i;
+    
     return -1;
 }
 
@@ -131,11 +142,27 @@ int is_trivial(clause* clause) {
 //THE FUNCTION EXPECTS SIZE OF THE DATA IN ARRAY ON 0'TH POSITION
 int* append(int* array, int element) {
     int datasize = abs(array[0]);
+    
     datasize++;
     int* resized = realloc(array, (datasize + 1) * sizeof(int));
+    
     resized[datasize] = element;
     resized[0] = -datasize;
     return resized;
+
+}
+
+int* append_unique(int* array, int element) {
+    
+    if (index_of_element(element, array, 1, abs(array[0])) != -1) return array;
+    return append(array, element);
+    
+}
+
+//THIS FUNCTION ADDS SET2 TO SET1, RESIZES SET1 APPROPRIATELY AND RETURNS POINTER TO NEW SET1
+int* add_set_to_set(int* set1, int* set2) {
+    for (int i = 1; i <= abs(set2[0]); i++) set1 = append_unique(set1, set2[i]);
+    return set1;
 }
 
 
@@ -168,7 +195,7 @@ int main(int argc, const char * argv[]) {
     //INIT GLOBALS FOR DEBUGGING
 
     
-    //INITIALIZE ALL LITERALS TO DEFAULT
+    //INITIALIZE ALL VARS TO DEFAULT
     for (int i = 0; i <= num_variables; i++) {
         variables[i].watched[0] = NULL;
         variables[i].watched[1] = NULL;
@@ -181,7 +208,7 @@ int main(int argc, const char * argv[]) {
     
     size_one_clauses = NULL;
     
-    //DO NECESSARY INITIALIZATION
+    //DO NECESSARY INITIALIZATION FOR CLAUSES
     for (int i = 0; i < num_clauses; i++) {
         //IF THE CLAUSE WAS UNIT, DON'T WATCH ANYTHING, ADD TO UNIT LIST
         if (clauses[i].size == 1) {
@@ -196,9 +223,9 @@ int main(int argc, const char * argv[]) {
             for (int watched_nr = 0; watched_nr < 2; watched_nr++) {
                 clauses[i].watched[watched_nr] = clauses[i].literals[watched_nr];
                 int attachID = clauses[i].literals[watched_nr];
-                int posOrNeg = attachID > 0 ? 0 : 1;
+                int p_o_n = attachID > 0 ? 0 : 1;
                 attachID = abs(attachID);
-                attach_int_to_list(i, &(variables[attachID].watched[posOrNeg]));
+                attach_int_to_list(i, &(variables[attachID].watched[p_o_n]));
             }
         }
     }
@@ -206,7 +233,7 @@ int main(int argc, const char * argv[]) {
     implications[0] = (malloc(sizeof(int)));
     implications[0][0] = 0;
     
-    //TRY SETTING ALL INITIAL VALUES (UNIT CLAUSES), IF FAILS THEN UNSAT
+    //TRY SETTING ALL INITIAL VALUES (SIZE-ONE CLAUSES), IF FAILS THEN UNSAT
     //IF ANY ASSIGNMENT FAILED THEN RUN THROUGH THE LIST ERASING ELEMENTS
     //IF ALL LITERALS FROM UNIT CLAUSES COUDLD BE ASSIGNED, THEN PROCEED WITH SOLVING
     int sat = decide(0);
@@ -375,8 +402,8 @@ int* simplify() {
     for (int clause_id = 0; clause_id < num_clauses; clause_id++) {
         for (int j = 0; j < clauses[clause_id].size; j++) {
             int var = clauses[clause_id].literals[j];
-            if (var > 0) occurences_pos[var] = append(occurences_pos[var], clause_id);
-            else occurences_neg[-var] = append(occurences_neg[-var], clause_id);
+            if (var > 0) occurences_pos[var] = append_unique(occurences_pos[var], clause_id);
+            else occurences_neg[-var] = append_unique(occurences_neg[-var], clause_id);
         }
     }
     
@@ -394,19 +421,10 @@ int* simplify() {
             tmp_literal = clauses[tmp_clause].literals[0];
             int* appr_list = tmp_literal > 0 ? occurences_neg[tmp_literal] : occurences_pos[-tmp_literal];
             
-            for (int i = 1; i <= abs(appr_list[0]); i++) {
-                set1 = append(set1, appr_list[i]);
-            }
+            set1 = add_set_to_set(set1, appr_list);
+            set1 = add_set_to_set(set1, added);
+            set1 = add_set_to_set(set1, strengthened);
             
-            for (int i = 1; i <= abs(added[0]); i++) {
-                if (index_of_element(added[i], set1, 1, abs(set1[0])) < 0) set1 = append(set1, added[i]);
-            }
-            
-            for (int i = 1; i <= abs(strengthened[0]); i++) {
-                if (index_of_element(strengthened[i], set1, 1, abs(set1[0])) < 0) {
-                    set1 = append(set1, strengthened[i]);
-                }
-            }
             free(added);
             free(strengthened);
             
@@ -422,17 +440,13 @@ int* simplify() {
             
             //DONE (apparently)
             for (int i = 1; i <= abs(set1[0]); i++) {
-                int * new_strengthened = self_subsume(set1[i], occurences_pos, occurences_neg, &touched);
-                for (int i = 1; i <= abs(new_strengthened[0]); i++) {
-                    if (index_of_element(new_strengthened[i], strengthened, 1, abs(strengthened[0])) < 0) {
-                        strengthened = append(strengthened, new_strengthened[i]);
-                    }
-                }
+                int* new_strengthened = self_subsume(set1[i], occurences_pos, occurences_neg, &touched);
+                strengthened = add_set_to_set(strengthened, new_strengthened);
                 free(new_strengthened);
                 new_strengthened = NULL;
             }
             
-            //propagate top_level (unit clauses!)
+            //propagate top_level (size-one clauses!)
             //will touch variables
             //this might remove clauses as well as strenghten them -> both to-remove and strengthened arrays will be modified by these
             //need also information about which ones have become unit
@@ -454,12 +468,10 @@ int* simplify() {
             //this also needs [occurences] list to modify and will remove clauses -> return or modify inside
             if (index_of_element(set0[i], to_remove, 1, to_remove[0]) < 0) {
                 int* new_removed = subsume(set0[i], occurences_pos, occurences_neg, &touched);
-                for (int j = 1; j <= abs(new_removed[0]); j++) {
-                    if (index_of_element(new_removed[i], to_remove, 1, abs(to_remove[0]))) to_remove = append(to_remove, new_removed[i]);
-                }
+                to_remove = add_set_to_set(to_remove, new_removed);
                 free(new_removed);
                 new_removed = NULL;
-            };
+            }
         }
         
         do {
@@ -470,9 +482,12 @@ int* simplify() {
             //DO THIS
             for (int i = 1; i < abs(set[0]); i++) {
                 //it will generate clauses -> will modify added, but also remove clauses that are subsumed
+                //and top-level propagation will strengthen some
+                //top-level propagation needs info about clauses of size 1
                 //need to modify occurences list
+                int* new_removed = maybe_eliminate(set[i], occurences_pos, occurences_neg, &touched, &added);
+                to_remove = add_set_to_set(to_remove, new_removed);
                 
-                //maybe_eliminate_x
             }
             free(set);
             set = NULL;
@@ -486,8 +501,24 @@ int* simplify() {
     return to_remove;
 }
 
+
+void strengthen(int clause_id, int literal, int** occurences_pos, int** occurences_neg, int** ptr_touched) {
+    //TOUCH ALL VARIABLES FROM STRENGTHENED CLAUSE
+    for (int j = 0; j < clauses[clause_id].size; j++) {
+        int var = abs(clauses[clause_id].literals[j]);
+        *ptr_touched = append_unique(*ptr_touched, var);
+    }
+    //if we strengthen the clause we remove the literal from there, and then remove this clause's id from
+    //the occurences list of that literal
+    
+    //remove_here(...)
+    
+    if (literal > 0) occurences_pos[literal]; // = remove_from_list(occurences_pos[-literal], subsumed_by[subsumed])
+    else occurences_neg[-literal]; // = remove_from_list(occurences_neg[literal], subsumed_by[subsumed])
+}
+
 //might result in a problem with strengthening size-one clause leading to weird stuff duh
-// -> don't strengthen size-one clauses
+// -> don't strengthen size-one clauses -> or do but keep track of 'em
 int* self_subsume(int clause_id, int** occurences_pos, int** occurences_neg, int** ptr_touched) {
     
     int* strengthened = malloc(sizeof(int));
@@ -496,34 +527,14 @@ int* self_subsume(int clause_id, int** occurences_pos, int** occurences_neg, int
     for (int i = 0; i < clauses[clause_id].size; i++) {
         int literal = clauses[clause_id].literals[i];
         clauses[clause_id].literals[i] = -literal;
-        int* subsumed_by;// = find_subsumed(clause_id);
+        int* subsumed;// = find_subsumed(clause_id);
         clauses[clause_id].literals[i] = literal;
         
-        for (int subsumed = 1; subsumed <= abs(subsumed_by[0]); subsumed++) {
-            
-            //TOUCH ALL VARIABLES FROM STRENGTHENED CLAUSE
-            for (int j = 0; j < clauses[subsumed_by[subsumed]].size; j++) {
-                int var = abs(clauses[subsumed_by[subsumed]].literals[j]);
-                if (index_of_element(var, *ptr_touched, 1, (*ptr_touched)[0]) < 0) *ptr_touched = append(*ptr_touched, var);
-                
-            }
-            
-            //if we strengthen the clause we remove the literal from there, and then remove this clause's id from
-            //the occurences list of that literal
-            
-            //remove_here(...)
-            
-            //strengthen(subsumed_by[subsumed], -literal); -> implement this
-            if (-literal > 0) occurences_pos[-literal]; // = remove_from_list(occurences_pos[-literal], subsumed_by[subsumed])
-            else occurences_neg[literal]; // = remove_from_list(occurences_neg[literal], subsumed_by[subsumed])
-            
-            //DO NOT DUPLICATE STRENGHTHENED'S PRESENCE
-            if (index_of_element(subsumed_by[subsumed], strengthened, 1, abs(strengthened[0])) < 0) {
-                strengthened = append(strengthened, subsumed_by[subsumed]);
-            }
-        }
-        free(subsumed_by);
-        subsumed_by = NULL;
+        for (int j = 1; j <= abs(subsumed[0]); j++) strengthen(subsumed[j], -literal, occurences_pos, occurences_neg, ptr_touched);
+        strengthened = add_set_to_set(strengthened, subsumed);
+        
+        free(subsumed);
+        subsumed = NULL;
     }
     return strengthened;
 }
@@ -534,23 +545,23 @@ int* subsume(int clause_id, int** occurences_pos, int** occurences_neg, int** pt
     
     int* to_remove = malloc(sizeof(int));
     to_remove[0] = 0;
-    int* subsumed_by; // = find_subsumed(clause_id);
+    int* subsumed; // = find_subsumed(clause_id);
     
-    for (int i = 1; i <= abs(subsumed_by[0]); i++) {
-        for (int j = 0; j < clauses[subsumed_by[i]].size; j++) {
+    for (int i = 1; i <= abs(subsumed[0]); i++) {
+        for (int j = 0; j < clauses[subsumed[i]].size; j++) {
             
-            int literal = clauses[subsumed_by[i]].literals[j];
+            int literal = clauses[subsumed[i]].literals[j];
             int var = abs(literal);
             
             //TOUCH VARIABLE FROM SUBSUMED CLAUSE
-            if (index_of_element(var, *ptr_touched, 1, (*ptr_touched)[0]) < 0) *ptr_touched = append(*ptr_touched, var);
+            *ptr_touched = append_unique(*ptr_touched, var);
             
             //REMOVE THE CLAUSE FROM IT'S LITERALS' OCCURENCES LIST
             if (literal > 0) occurences_pos[literal];// = remove_from_list(occurences_pos[literal], subsumed_by[i]);
             else occurences_neg[-literal]; // = remove_from_list(occurences_neg[-literal], subsumed_by[i]);
         }
-        to_remove = append(to_remove, subsumed_by[i]);
     }
+    to_remove = add_set_to_set(to_remove, subsumed);
     return to_remove;
 }
 
@@ -608,15 +619,14 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
             else occurences_neg[-literal]; // = remove_from_list(occurences_neg[-literal], erased_id)
             
             //TOUCH VARIABLE
-            if (index_of_element(abs(literal), *ptr_touched, 1, abs((*ptr_touched)[0])) < 0)  {
-                *ptr_touched = append(*ptr_touched, abs(literal));
-            }
-            
-            to_remove = append(to_remove, erased_id);
+            *ptr_touched = append_unique(*ptr_touched, abs(literal));
         }
+        to_remove = add_set_to_set(to_remove, occurences_pos[var]);
+
     }
     
     //DO THE SAME FOR NEGATIVE OCCURENCES LIST -> duplicate code, rearrange! -> possible bugs
+    //DEAL WITH IT!!!
     for (int i = 1; i <= abs(occurences_neg[var][0]); i++) {
         int erased_id = occurences_neg[var][i];
         for (int lit = 0; lit < clauses[erased_id].size; lit++) {
@@ -624,11 +634,9 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
             if (literal > 0) occurences_pos[literal]; // = remove_from_list(occurences_pos[literal], erased_id);
             else occurences_neg[-literal]; // = remove_from_list(occurences_neg[-literal], erased_id);
             
-            if (index_of_element(abs(literal), *ptr_touched, 1, abs((*ptr_touched)[0])) < 0)  {
-                *ptr_touched = append(*ptr_touched, abs(literal));
-            }
+            *ptr_touched = append_unique(*ptr_touched, abs(literal));
             
-            to_remove = append(to_remove, erased_id);
+            to_remove = append_unique(to_remove, erased_id);
         }
     }
     
@@ -639,12 +647,18 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
         //FOR EVERY LITERAL OF NEW CLAUSE ADD THE CLAUSE'S ID TO OCCURENCES LIST
         for(int lit = 0; lit < new_learned[i].size; lit++) {
             int literal = new_learned[i].literals[lit];
-            if (literal > 0) occurences_pos[literal] = append(occurences_pos[literal], num_clauses);
-            else occurences_neg[-literal] = append(occurences_neg[-literal], num_clauses);
+            if (literal > 0) occurences_pos[literal] = append_unique(occurences_pos[literal], num_clauses);
+            else occurences_neg[-literal] = append_unique(occurences_neg[-literal], num_clauses);
         }
-        *ptr_added = append(*ptr_added, num_clauses);
+        //ADD THE CLAUSE TO ADDED LIST
+        *ptr_added = append_unique(*ptr_added, num_clauses);
+        
+        //AND ADD NEWLY LEARNED CLAUSE TO DATABASE!
         clauses[num_clauses] = new_learned[i];
+        num_clauses++;
     }
+    
+    free(new_learned);
     return to_remove;
 }
 
@@ -662,9 +676,79 @@ int* maybe_eliminate(int var, int** occurences_pos, int** occurences_neg, int** 
     //will add clauses -> modify added
     //will touch variables -> modify touched
     //won't strengthen
-    //maybe_clause_distribute(...)
+    to_remove = maybe_eliminate(var, occurences_pos, occurences_neg, ptr_touched, ptr_added);
     
     //if x eliminated -> propagate top level
+    
+    return to_remove;
+}
+
+//top-level propagation will - strengthen clauses, remove clauses - need strenghtened list
+//really needs list of occurences
+//will use information about clauses of size 1
+
+
+int* propagate_top_level(int** occurences_pos, int** occurences_neg, int** ptr_strength, int** ptr_touched) {
+    int* to_remove = malloc(sizeof(int));
+    to_remove[0] = 0;
+    
+    //THERE IS A LIST OF CLAUSES OF SIZE ONE
+    int_list* tmp = size_one_clauses;
+    while (tmp != NULL) {
+        
+        if (clauses[tmp->int_data].size == 0) {
+            tmp = tmp->next;
+            free(size_one_clauses);
+            size_one_clauses = tmp;
+            continue;
+        }
+        
+        int lit_assigned = clauses[tmp->int_data].literals[0];
+        
+        //FIRST STAGE TO REMOVE ALL THE CLAUSES WHERE THIS LITERAL ONES THE CLAUSE (INCLUDING SIZE ONE, ACTUALLY)
+        // -> in this step you should also erase occurence of that clause's literals
+        // -> automatically erasing list of occurences of the lit of size-one clause, hopefully
+        int** oned = lit_assigned > 0 ? &occurences_pos[lit_assigned] : &occurences_neg[-lit_assigned];
+        for (int i = 1; i <= abs((*oned)[0]); i++) {
+            int remove_id = (*oned)[i];
+            for (int j = 0; j < clauses[remove_id].size; j++) {
+                int literal = clauses[remove_id].literals[j];
+                if (literal > 0) occurences_pos[literal];// = remove_from_list blah blah
+                else occurences_neg[-literal];// = remove_from_list blah blah
+                
+                //TOUCH VARS FROM REMOVED CLAUSES, DON'T TOUCH ASSIGNED LITERAL (WILL UNTOUCH IT LATER)
+                *ptr_touched = append_unique(*ptr_touched, abs(literal));
+                
+            }
+        }
+        
+        if ((*oned)[0] != 0) {
+            fprintf(stderr, "ASSERTION FAILED! UNIT PROPAGATION NOT FUNCTIONING PROPERLY\n");
+            exit(1);
+        }
+        
+        //THEN ALL CLAUSES CONTAINING THE NEGATIVE OF LITERAL BEING IN A CLAUSE OF SIZE ONE SHOULD BE STRENGHTENED
+        int** zeroed = lit_assigned > 0 ? &occurences_neg[lit_assigned] : &occurences_pos[-lit_assigned];
+        
+        //REMOVE THE NEGATIVE OF INITIATOR FROM ALL THE CLAUSES IT OCCURS IN
+        for (int i = 1; i <= abs((*zeroed)[0]); i++) {
+            int strengthen_id = (*zeroed)[i];
+            
+            strengthen(strengthen_id, -lit_assigned, occurences_pos, occurences_neg, ptr_touched);
+            *ptr_touched;// = remove from list the initiator variable yeah
+            *ptr_strength = append_unique(*ptr_strength, strengthen_id);
+        }
+        
+        if ((*zeroed)[0] != 0) {
+            fprintf(stderr, "ASSERTION FAILED! UNIT PROPAGATION NOT FUNCTIONING PROPERLY\n");
+            exit(1);
+        }
+        
+        tmp = tmp->next;
+        free(size_one_clauses);
+        size_one_clauses = tmp;
+    }
+    
     return to_remove;
 }
 
@@ -1041,26 +1125,26 @@ clause* first_uip(clause* conflict, int decision_level) {
 
 //THIS FUNCTION IMPLEMENTS RESOLUTION (a + b)(a' + c) = (a + b)(a' + c)(b + c)
 //AND RETURNS POINTER TO (b + c)
-clause* resolve(clause* conflict, clause* antecedent, int res_var) {
+clause* resolve(clause* first, clause* second, int res_var) {
     clause* resolvent = malloc(sizeof(clause));
     resolvent->literals = malloc(0);
     
     int resolvent_size = 0;
     
     //ADD LITERALS FROM INITIATOR CLAUSE TO RESOLVING
-    for (int i = 0; i < conflict->size; i++) {
+    for (int i = 0; i < first->size; i++) {
         //this literal is valid to be in resolvent
-        if (conflict->literals[i] != res_var) {
+        if (first->literals[i] != res_var) {
             resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
-            resolvent->literals[resolvent_size] = conflict->literals[i];
+            resolvent->literals[resolvent_size] = first->literals[i];
             resolvent_size++;
         }
     }
-    //ADD LITERALS FROM ANTECEDENT CLAUSE TO RESOLVING
-    for (int i = 0; i < antecedent->size; i++) {
-        if (antecedent->literals[i] != -res_var && index_of_element(antecedent->literals[i], resolvent->literals, 0, resolvent_size) < 0) {
+    //ADD LITERALS FROM SECOND CLAUSE TO RESOLVING
+    for (int i = 0; i < second->size; i++) {
+        if (second->literals[i] != -res_var && index_of_element(second->literals[i], resolvent->literals, 0, resolvent_size) < 0) {
             resolvent->literals = realloc(resolvent->literals, sizeof(int) * (resolvent_size + 1));
-            resolvent->literals[resolvent_size] = antecedent->literals[i];
+            resolvent->literals[resolvent_size] = second->literals[i];
             resolvent_size++;
         }
     }
@@ -1076,7 +1160,7 @@ void attach_int_to_list(int data, int_list** attach_to) {
     new_list_el->int_data = data;
     new_list_el->next = NULL;
     
-    //ATTACH TO IS THE HEAD OF THE LIST
+    //attach_to IS THE HEAD OF THE LIST
     int_list* tmp = *attach_to;
     
     //IF HEAD IS NULL MAKE NEW ELEMENT A HEAD
