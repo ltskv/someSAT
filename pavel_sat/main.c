@@ -98,6 +98,8 @@ int* propagate_top_level(int** occurences_pos, int** occurences_neg, int** ptr_s
 
 //SERVICE FUNCTIONS
 void attach_int_to_list(int data, int_list** attach_to);
+void init_and_proceed();
+void clean_up();
 
 
 //This function may be used and modified for debugging purposes
@@ -230,11 +232,21 @@ int main(int argc, const char * argv[]) {
     num_clauses = parse_cnf(argv[1]);
     
     if (num_clauses == 0) {
-        free(clauses);
         exit(0);
     }
     
+    
     //DO PREPROCESSING HERE
+    //DEEP COPY BEFORE PREPROCESSING!
+    clause* tmp_clauses = malloc(sizeof(clause) * num_clauses);
+    int tmp_num_clauses = num_clauses;
+    
+    for (int i = 0; i < num_clauses; i++) {
+        tmp_clauses[i].size = clauses[i].size;
+        tmp_clauses[i].literals = malloc(sizeof(int) * tmp_clauses[i].size);
+        for (int j = 0; j < tmp_clauses[i].size; j++) tmp_clauses[i].literals[j] = clauses[i].literals[j];
+    }
+    
     printf("Enter preprocessing\n");
     int* to_remove = simplify();
     printf("Leave preprocessing\n");
@@ -247,6 +259,8 @@ int main(int argc, const char * argv[]) {
         return 0;
 
     }
+    
+    //REMOVE THOSE CLAUSES THAT SHOULD BE REMOVED
     int num_clauses_after_preprocess = 0;
     
     clause* new_clauses = malloc(sizeof(clause) * (num_clauses - datasize(to_remove)));
@@ -255,39 +269,81 @@ int main(int argc, const char * argv[]) {
             new_clauses[num_clauses_after_preprocess] = clauses[i];
             num_clauses_after_preprocess++;
         }
-        else {
-            free(clauses[i].literals);
-        }
-    }
-    for (int i = 1; i <= datasize(to_remove); i++) {
-        printf("%d ", to_remove[i]);
-    }
-    printf("\n");
-    
-    if (num_clauses_after_preprocess != num_clauses - datasize(to_remove)) {
-        printf("curr_added = %d, num_clauses - datasize(to_remove) = %d", num_clauses_after_preprocess, num_clauses - datasize(to_remove));
-        fprintf(stderr, "ASSERTION FAILED. CLAUSES ARE NOT REMOVED PROPERLY\n");
-        exit(1);
+        else free(clauses[i].literals);
     }
     
-    free(clauses);
-    clauses = new_clauses;
-    new_clauses = NULL;
     free(to_remove);
     to_remove = NULL;
     
-    printf("number of clauses before preprocessing: %d\n", num_clauses);
+    printf("number of clauses before preprocessing: %d\n", tmp_num_clauses);
     printf("number of clauses after preprocessing: %d\n", num_clauses_after_preprocess);
+    
+    free(clauses);
+    clauses = new_clauses;
     num_clauses = num_clauses_after_preprocess;
+    
+
+    //INIT GLOBALS FOR DEBUGGING
+    
+    
+    //TRY SETTING ALL INITIAL VALUES (SIZE-ONE CLAUSES), IF FAILS THEN UNSAT
+    //IF ANY ASSIGNMENT FAILED THEN RUN THROUGH THE LIST ERASING ELEMENTS
+    //IF ALL LITERALS FROM UNIT CLAUSES COUDLD BE ASSIGNED, THEN PROCEED WITH SOLVING
+    
+    
+    init_and_proceed();
+    
+    int sat = decide(0);
+    
+    if (sat) {
+        printf("SATISFIABLE. CALCULATING ASSIGNMENT...\n");
+        
+        clean_up();
+        
+        clauses = tmp_clauses;
+        num_clauses = tmp_num_clauses;
+        
+        init_and_proceed();
+        sat = decide(0);
+    }
+    
+    ///DEGUGGING AND OPTIMIZATION INFORMATION
+    printf("clauses learned: %d\n", num_learned);
+    printf("branching decisions: %d\n", num_branching);
+    
+    FILE* output_sat = open_for_solution(argv);
+    
+    if (!sat) {
+        fprintf(output_sat, "s UNSATISFIABLE\n");
+        printf("UNSATISFIABLE\n");
+    }
+    else {
+        fprintf(output_sat, "s SATISFIABLE\nv ");
+        for (int i = 1; i <= num_variables; i++) {
+            int sign = variables[i].assignment == 0 ? -1 : 1;
+            fprintf(output_sat, "%d 0\n", i * sign);
+        }
+        fprintf(output_sat, "0\n");
+    }
+    
+    clean_up();
+    fclose(output_sat);
+}
+
+//--------------------
+//------END MAIN------
+//--------------------
+
+void init_and_proceed() {
     
     //INIT GLOBALS
     variables = (malloc(sizeof(variable) * (num_variables + 1)));
     implications = (malloc(sizeof(int*)));
     implications[0] = NULL;
     unassigned_count = num_variables;
-
-    //INIT GLOBALS FOR DEBUGGING
-
+    num_learned = 0;
+    num_branching = 0;
+    decay_counter = 0;
     
     //INITIALIZE ALL VARS TO DEFAULT
     for (int i = 0; i <= num_variables; i++) {
@@ -300,13 +356,15 @@ int main(int argc, const char * argv[]) {
         variables[i].vsids = 0;
     }
     
-    size_one_clauses = NULL;
+    if (size_one_clauses != NULL) {
+        fprintf(stderr, "MIGHT BE AN ISSUE, UNIT PROPAGATION NOT COMPLETE\n");
+        exit(1);
+    };
     
-    printf("will solve the following problem: \n");
-
+    //printf("will solve the following problem: \n");
     //DO NECESSARY INITIALIZATION FOR CLAUSES
     for (int i = 0; i < num_clauses; i++) {
-        print_clause(clauses + i);
+        //print_clause(clauses + i);
         //IF THE CLAUSE WAS UNIT, DON'T WATCH ANYTHING, ADD TO UNIT LIST
         if (clauses[i].size == 1) {
             clauses[i].watched[0] = 0;
@@ -329,41 +387,30 @@ int main(int argc, const char * argv[]) {
     
     implications[0] = (malloc(sizeof(int)));
     implications[0][0] = 0;
-    
-    //TRY SETTING ALL INITIAL VALUES (SIZE-ONE CLAUSES), IF FAILS THEN UNSAT
-    //IF ANY ASSIGNMENT FAILED THEN RUN THROUGH THE LIST ERASING ELEMENTS
-    //IF ALL LITERALS FROM UNIT CLAUSES COUDLD BE ASSIGNED, THEN PROCEED WITH SOLVING
-    int sat = decide(0);
-    
-    ///DEGUGGING AND OPTIMIZATION INFORMATION
-    printf("clauses learned: %d\n", num_learned);
-    printf("branching decisions: %d\n", num_branching);
-    
-    FILE* output_sat = open_for_solution(argv);
-    
-    if (!sat) {
-        fprintf(output_sat, "s UNSATISFIABLE\n");
-        printf("UNSATISFIABLE\n");
-    }
-    else {
-        printf("SATISFIABLE\n");
-        fprintf(output_sat, "s SATISFIABLE\nv ");
-        for (int i = 1; i <= num_variables; i++) {
-            int sign = variables[i].assignment == 0 ? -1 : 1;
-            fprintf(output_sat, "%d ", i * sign);
-        }
-        fprintf(output_sat, "0\n");
-    }
-    
-    fclose(output_sat);
-    free(clauses);
-    free(variables);
-    free(implications);
 }
 
-//--------------------
-//------END MAIN------
-//--------------------
+void clean_up() {
+    
+    //CLEAN UP ALL CLAUSES' LITERALS
+    for (int i = 0; i < num_clauses; i++) free(clauses[i].literals);
+    
+    //CLEAN UP ALL VARIABLE'S WATCHED LISTS
+    for (int i = 1; i <= num_variables; i++) {
+        for (int p_n = 0; p_n < 2; p_n++) {
+            int_list* tmp = variables[i].watched[p_n];
+            while (tmp != NULL) {
+                tmp = tmp->next;
+                free(variables[i].watched[p_n]);
+                variables[i].watched[p_n] = tmp;
+            }
+        }
+    }
+    
+    //CLEAN UP EVERYTHING ELSE
+    free(variables);
+    free(clauses);
+    free(implications);
+}
 
 //PARSER
 int parse_cnf(const char* cnf_filepath) {
@@ -589,10 +636,7 @@ int* simplify() {
         set0 = NULL;
     } while (datasize(added) != 0);
     
-    free(occurences_pos[0]);
-    free(occurences_neg[0]);
-    
-    for (int i = 1; i <= num_variables; i++) {
+    for (int i = 0; i <= num_variables; i++) {
         free(occurences_pos[i]);
         free(occurences_neg[i]);
     }
@@ -733,21 +777,21 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
     clause* new_learned = malloc(0);
     int num_learned = 0;
     
-    printf("will try to remove var %d\n", var);
-    printf("it occurs in clauses as positive literal: \n");
+    //printf("will try to remove var %d\n", var);
+    //printf("it occurs in clauses as positive literal: \n");
     for (int i = 1; i <= datasize(occurences_pos[var]); i++) {
-        print_clause(clauses + occurences_pos[var][i]);
+        //print_clause(clauses + occurences_pos[var][i]);
     }
-    printf("it occurs in clauses as negative literal: \n");
+    //printf("it occurs in clauses as negative literal: \n");
     for (int i = 1; i <= datasize(occurences_neg[var]); i++) {
-        print_clause(clauses + occurences_neg[var][i]);
+        //print_clause(clauses + occurences_neg[var][i]);
     }
     
-    printf("learn stuff:\n");
+    //printf("learn stuff:\n");
     for (int pos = 1; pos <= datasize(occurences_pos[var]); pos++) {
         for (int neg = 1; neg <= datasize(occurences_neg[var]); neg++) {
             clause* new_clause = resolve(clauses + occurences_pos[var][pos], clauses + occurences_neg[var][neg], var);
-            print_clause(new_clause);
+            //print_clause(new_clause);
             if (is_trivial(new_clause)) {
                 free(new_clause->literals);
                 free(new_clause);
@@ -760,7 +804,7 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
             free(new_clause);
         }
     }
-    printf("\n");
+    //printf("\n");
     
     //TOO MANY CLAUSES GENERATED, ABORT EVERYTHING
     if (num_learned > abs(occurences_pos[var][0]) + abs(occurences_neg[var][0])) {
@@ -799,7 +843,7 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
                 //TOUCH VARIABLE
                 *ptr_touched = append_unique(*ptr_touched, abs(literal));
             }
-            printf("add %d to to_remove\n", erased_id);
+            //printf("add %d to to_remove\n", erased_id);
             to_remove = append_unique(to_remove, erased_id);
         }
     }
@@ -810,9 +854,9 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
     //SECURE ENOUGH SPACE IN VAULT FOR NEW CLAUSES
     clauses = realloc(clauses, sizeof(clause) * (num_clauses + num_learned));
     
-    printf("learned clauses:\n");
+    //printf("learned clauses:\n");
     for (int i = 0; i < num_learned; i++) {
-        print_clause(new_learned + i);
+        //print_clause(new_learned + i);
         //FOR EVERY LITERAL OF NEW CLAUSE ADD THE CLAUSE'S ID TO OCCURENCES LIST
         for(int lit = 0; lit < new_learned[i].size; lit++) {
             int literal = new_learned[i].literals[lit];
@@ -832,12 +876,12 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
         clauses[num_clauses] = new_learned[i];
         num_clauses++;
     }
-    printf("\n");
+    //printf("\n");
 
     
     free(new_learned);
     
-    printf("size of to_remove %d\n", datasize(to_remove));
+    //printf("size of to_remove %d\n", datasize(to_remove));
     return to_remove;
 }
 
