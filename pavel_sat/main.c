@@ -58,6 +58,12 @@ int unassigned_count = 0;
 //VSIDS GLOBALS
 int decay_counter = 0;
 
+//RANDOM RESTART GLOBALS
+int num_conflicts = 0;
+int seq_no = 0;
+int pos_in_seq = 0;
+int restart_cond = 100;
+
 //LIST OF CLAUSES OF SIZE ONE -> LEARNED ASSIGNMENTS
 int_list* size_one_clauses = NULL;
 
@@ -311,6 +317,7 @@ int decide(int decision_level) {
     //bottom of the problem is reached
     //clean up implications since no backtracking is necessary anymore
     if (unassigned_count == 0) {
+        printf("reached decision level %d\n", decision_level);
         for (int i = 0; i < decision_level; i++) {
             free(implications[i]);
             implications[i] = NULL;
@@ -561,8 +568,31 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     }
     
     //ANOTHER WATCH HAS ALSO ZEROING ASSIGNMENT, WHICH LEADS TO CONFLICT!
+    
     if (decision_level == 0) return VISIT_CONFLICT;
     
+    num_conflicts++;
+
+
+    if (num_conflicts == restart_cond) {
+        
+        int new_cond = 100;
+        for (int i = 0; i < pos_in_seq; i++) {
+            new_cond *= 2;
+        }
+        restart_cond = new_cond;
+        printf("new restart cond %d\n", restart_cond);
+        pos_in_seq++;
+        
+        if (pos_in_seq > seq_no) {
+            pos_in_seq = 0;
+            restart_cond = 100;
+            seq_no++;
+        }
+        num_conflicts = 0;
+        return VISIT_NONCHR_BACKTR - decision_level + 1;
+    }
+
     clause* learned_clause = first_uip(clauses + to_visit, decision_level);
     
     //FIND OUT SECOND LATEST DECISION LEVEL IN A LEARNED CLAUSE TO BACKTRACK TO
