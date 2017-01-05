@@ -58,12 +58,6 @@ int unassigned_count = 0;
 //VSIDS GLOBALS
 int decay_counter = 0;
 
-//RANDOM RESTART GLOBALS
-int num_conflicts = 0;
-int seq_no = 0;
-int pos_in_seq = 0;
-int restart_cond = 100;
-
 //LIST OF CLAUSES OF SIZE ONE -> LEARNED ASSIGNMENTS
 int_list* size_one_clauses = NULL;
 
@@ -219,10 +213,10 @@ int main(int argc, const char * argv[]) {
     }
     else {
         printf("SATISFIABLE\n");
-        fprintf(output_sat, "s SATISFIABLE\nv ");
+        fprintf(output_sat, "s SATISFIABLE\nv\n");
         for (int i = 1; i <= num_variables; i++) {
             int sign = variables[i].assignment == 0 ? -1 : 1;
-            fprintf(output_sat, "%d ", i * sign);
+            fprintf(output_sat, "%d 0\n", i * sign);
         }
         fprintf(output_sat, "0\n");
     }
@@ -317,7 +311,6 @@ int decide(int decision_level) {
     //bottom of the problem is reached
     //clean up implications since no backtracking is necessary anymore
     if (unassigned_count == 0) {
-        printf("reached decision level %d\n", decision_level);
         for (int i = 0; i < decision_level; i++) {
             free(implications[i]);
             implications[i] = NULL;
@@ -476,16 +469,18 @@ int assign(int variable_id, int decision_level, int assignment) {
 //NECESSARY CLEAN-UP FOR BACKTRACKING IS DONE HERE
 void unassign(int decision_level) {
     
+    decay_counter++;
     //PERIODICALLY DECAY VSIDS
-    if (decay_counter == 12) {
+    if (decay_counter == 50) {
         for (int i = 1; i <= num_variables; i++) {
             variables[i].vsids /= 2;
         }
         decay_counter = 0;
     }
     
-    //ERASE ASSIGNMENT
+    //ERASE ASSIGNMENT (try implementing vsids in here)
     for (int i = 1; i <= abs(implications[decision_level][0]); i++) {
+        variables[implications[decision_level][i]].vsids++;
         variables[implications[decision_level][i]].assignment = -1;
         variables[implications[decision_level][i]].decision_level = -1;
         variables[implications[decision_level][i]].antecedent = -1;
@@ -571,28 +566,6 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     
     if (decision_level == 0) return VISIT_CONFLICT;
     
-    num_conflicts++;
-
-
-    if (num_conflicts == restart_cond) {
-        
-        int new_cond = 100;
-        for (int i = 0; i < pos_in_seq; i++) {
-            new_cond *= 2;
-        }
-        restart_cond = new_cond;
-        printf("new restart cond %d\n", restart_cond);
-        pos_in_seq++;
-        
-        if (pos_in_seq > seq_no) {
-            pos_in_seq = 0;
-            restart_cond = 100;
-            seq_no++;
-        }
-        num_conflicts = 0;
-        return VISIT_NONCHR_BACKTR - decision_level + 1;
-    }
-
     clause* learned_clause = first_uip(clauses + to_visit, decision_level);
     
     //FIND OUT SECOND LATEST DECISION LEVEL IN A LEARNED CLAUSE TO BACKTRACK TO
@@ -630,12 +603,6 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     
     int backtrack_levels = max_exc_current - decision_level;
     
-    //INCREMENT VSIDS FOR VARIABLES IN NEW CLAUSE
-    decay_counter++;
-    for (int i = 0; i < learned_clause->size; i++) {
-        int var_to_increment = abs(learned_clause->literals[i]);
-        variables[var_to_increment].vsids++;
-    }
     
     //ADD NEWLY LEARNED CLAUSE TO GLOBAL DATABASE
     num_learned++;
@@ -650,6 +617,7 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
         clauses[num_clauses].watched[1] = 0;
         attach_int_to_list(num_clauses, &size_one_clauses);
     }
+    
     else {
         int to_watch[2];
         //most recently assigned variables should be watched to effectively utilize non-chronological backtrack
