@@ -213,10 +213,10 @@ int main(int argc, const char * argv[]) {
     }
     else {
         printf("SATISFIABLE\n");
-        fprintf(output_sat, "s SATISFIABLE\nv\n");
+        fprintf(output_sat, "s SATISFIABLE\nv ");
         for (int i = 1; i <= num_variables; i++) {
             int sign = variables[i].assignment == 0 ? -1 : 1;
-            fprintf(output_sat, "%d 0\n", i * sign);
+            fprintf(output_sat, "%d ", i * sign);
         }
         fprintf(output_sat, "0\n");
     }
