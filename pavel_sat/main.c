@@ -167,6 +167,8 @@ int is_trivial(clause* clause) {
     return 0;
 }
 
+//IT IS POSSIBLE THAT USING std::vector WOULD SPARE ME A LOT OF CODE, BUT SINCE THIS WAS ORIGINALLY WRITTEN IN C
+//IT WOULD TAKE REALLY A LOT OF WORK TO REWRITE THIS (BUT WILL PROBABLY DO ANYWAY LATER)
 int datasize(int* array) {
     return abs(array[0]);
 }
@@ -235,6 +237,10 @@ int main(int argc, const char * argv[]) {
         exit(0);
     }
     
+    int need_solution = 1;
+    if (argv[2] != NULL) {
+        if (!strcmp(argv[2], "-s")) need_solution = 0;
+    }
     
     //DO PREPROCESSING HERE
     //DEEP COPY BEFORE PREPROCESSING!
@@ -247,15 +253,15 @@ int main(int argc, const char * argv[]) {
         for (int j = 0; j < tmp_clauses[i].size; j++) tmp_clauses[i].literals[j] = clauses[i].literals[j];
     }
     
-    printf("Enter preprocessing\n");
     int* to_remove = simplify();
-    printf("Leave preprocessing\n");
     
     if (size_zero_clauses != NULL) {
-        FILE* output_sat = open_for_solution(argv);
-        fprintf(output_sat, "s UNSATISFIABLE\n");
+        if (need_solution) {
+            FILE* output_sat = open_for_solution(argv);
+            fprintf(output_sat, "s UNSATISFIABLE\n");
+            fclose(output_sat);
+        }
         printf("UNSATISFIABLE, TRIVIAL PROBLEM\n");
-        fclose(output_sat);
         return 0;
 
     }
@@ -294,6 +300,13 @@ int main(int argc, const char * argv[]) {
     init_and_proceed();
     
     int sat = decide(0);
+    
+    if (!need_solution) {
+        if (sat) printf("SATISFIABLE\n");
+        else printf("UNSATISFIABLE\n");
+        clean_up();
+        return 0;
+    }
     
     if (sat) {
         printf("SATISFIABLE. CALCULATING ASSIGNMENT...\n");
@@ -491,12 +504,12 @@ int parse_cnf(const char* cnf_filepath) {
 //-----PREPROCESSOR-----
 //----------------------
 
-//general idea: create new clauses to subsume old ones and eventually generate a list
-//with indices of clauses that should be removed
+//GENERAL IDEA: CREATE NEW CLAUSES TO SUBSUME OLD ONES AND EVENTUALLY GENERATE A LIST
+//WITH INDICES OF CLAUSES THAT SHOULD BE REMOVED
 
 int* simplify() {
     
-    //USE THESE THREE ARRAYS TO HOLD INDICES OF VARS AND CLAUSES THAT UNDERWENT MODIFICATION
+    //USE THESE THREE ARRAYS TO HOLD INDICES OF VARS AND CLAUSES THAT HAVE UNDERGONE MODIFICATION
     int* to_remove = malloc(sizeof(int));
     to_remove[0] = 0;
     
@@ -537,7 +550,6 @@ int* simplify() {
     }
     
     do {
-        printf("in outer loop\n");
         
         int tmp_clause = datasize(added) / 2 + 1; //choose clause sort-of randomly;
         int tmp_literal = clauses[added[tmp_clause]].literals[0];
@@ -546,7 +558,7 @@ int* simplify() {
         set0[0] = 0;
         
         set0 = add_set_to_set(set0, tmp_literal > 0 ? occurences_pos[tmp_literal] : occurences_neg[-tmp_literal]);
-        //here pick clause from added(random?) and pick literal from there and let set0 be list of that literal's occurences
+        //here pick clause from added(random) and pick literal from there and let set0 be list of that literal's occurences
         
         do {
             int* set1 = malloc(sizeof(int));
@@ -598,7 +610,6 @@ int* simplify() {
             
         } while (datasize(strengthened) != 0);
         
-        //DONE
         for (int i = 1; i <= datasize(set0); i++) {
             //will touch variables
             //this also needs [occurences] list to modify and will remove clauses -> return or modify inside
@@ -615,7 +626,6 @@ int* simplify() {
             touched = malloc(sizeof(int));
             touched[0] = 0;
             
-            //DO THIS
             for (int i = 1; i < datasize(set); i++) {
                 //it will generate clauses -> will modify added, but also remove clauses that are subsumed
                 //and top-level propagation will strengthen some
@@ -650,13 +660,14 @@ int* simplify() {
     return to_remove;
 }
 
-//might result in a problem with strengthening size-one clause leading to weird stuff duh
-// -> don't strengthen size-one clauses -> or do but keep track of 'em
+//might result in a problem with strengthening size-one clause leading to weird stuff
+// -> don't strengthen size-one clauses -> or do but keep track of them
 
 void strengthen(int clause_id, int literal, int** occurences_pos, int** occurences_neg, int** ptr_touched) {
     
     clause* to_strengthen = clauses + clause_id;
-    
+    printf("removed literal %d from clause ", literal);
+    print_clause(clauses + clause_id);
     //TOUCH ALL VARIABLES FROM STRENGTHENED CLAUSE
     for (int j = 0; j < to_strengthen->size; j++) {
         int var = abs(to_strengthen->literals[j]);
@@ -769,7 +780,6 @@ int* subsume(int clause_id, int** occurences_pos, int** occurences_neg, int** pt
 //then remove all clauses from these two sets, add newly created clauses to added and that's it
 //also erase occurences for the var
 //and for all literals from new clauses - touch
-//duh
 int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg, int** ptr_touched, int** ptr_added) {
     int* to_remove = malloc(sizeof(int));
     to_remove[0] = 0;
@@ -777,21 +787,9 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
     clause* new_learned = malloc(0);
     int num_learned = 0;
     
-    //printf("will try to remove var %d\n", var);
-    //printf("it occurs in clauses as positive literal: \n");
-    for (int i = 1; i <= datasize(occurences_pos[var]); i++) {
-        //print_clause(clauses + occurences_pos[var][i]);
-    }
-    //printf("it occurs in clauses as negative literal: \n");
-    for (int i = 1; i <= datasize(occurences_neg[var]); i++) {
-        //print_clause(clauses + occurences_neg[var][i]);
-    }
-    
-    //printf("learn stuff:\n");
     for (int pos = 1; pos <= datasize(occurences_pos[var]); pos++) {
         for (int neg = 1; neg <= datasize(occurences_neg[var]); neg++) {
             clause* new_clause = resolve(clauses + occurences_pos[var][pos], clauses + occurences_neg[var][neg], var);
-            //print_clause(new_clause);
             if (is_trivial(new_clause)) {
                 free(new_clause->literals);
                 free(new_clause);
@@ -804,7 +802,6 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
             free(new_clause);
         }
     }
-    //printf("\n");
     
     //TOO MANY CLAUSES GENERATED, ABORT EVERYTHING
     if (num_learned > abs(occurences_pos[var][0]) + abs(occurences_neg[var][0])) {
@@ -815,7 +812,7 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
         return to_remove;
     }
     
-    //ELSE HAVE LOTS OF FUN
+    //ELSE
     //erase occurences for ALL the vars from erased clauses
     //touch all the vars from erased clauses
     //add clauses to to_remove list
@@ -843,7 +840,6 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
                 //TOUCH VARIABLE
                 *ptr_touched = append_unique(*ptr_touched, abs(literal));
             }
-            //printf("add %d to to_remove\n", erased_id);
             to_remove = append_unique(to_remove, erased_id);
         }
     }
@@ -854,9 +850,7 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
     //SECURE ENOUGH SPACE IN VAULT FOR NEW CLAUSES
     clauses = realloc(clauses, sizeof(clause) * (num_clauses + num_learned));
     
-    //printf("learned clauses:\n");
     for (int i = 0; i < num_learned; i++) {
-        //print_clause(new_learned + i);
         //FOR EVERY LITERAL OF NEW CLAUSE ADD THE CLAUSE'S ID TO OCCURENCES LIST
         for(int lit = 0; lit < new_learned[i].size; lit++) {
             int literal = new_learned[i].literals[lit];
@@ -868,7 +862,6 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
         
         if (new_learned[i].size == 1) attach_int_to_list(num_clauses, &size_one_clauses);
         if (new_learned[i].size == 0) {
-            printf("That's funny but possible\n");
             attach_int_to_list(num_clauses, &size_zero_clauses);
         }
         
@@ -876,12 +869,8 @@ int* maybe_clause_distribute(int var, int** occurences_pos, int** occurences_neg
         clauses[num_clauses] = new_learned[i];
         num_clauses++;
     }
-    //printf("\n");
-
     
     free(new_learned);
-    
-    //printf("size of to_remove %d\n", datasize(to_remove));
     return to_remove;
 }
 
@@ -892,9 +881,9 @@ int* maybe_eliminate(int var, int** occurences_pos, int** occurences_neg, int** 
     if (occurences_pos[var][0] == 0 || occurences_neg[var][0] == 0) return to_remove;
     if (abs(occurences_pos[var][0]) > 10 && abs(occurences_neg[var][0]) > 10) return to_remove;
     
-    //FUCK DEFINITIONS
+    //DON'T USE DEFINITIONS SINCE IT'S KINDA COMPLICATED
     
-    //will remove clauses alright -> will return to_remove list
+    //will remove clauses -> will return to_remove list
     //will modify list of occurences (append even)
     //will add clauses -> modify added
     //will touch variables -> modify touched
@@ -904,7 +893,7 @@ int* maybe_eliminate(int var, int** occurences_pos, int** occurences_neg, int** 
     to_remove = add_set_to_set(to_remove, new_removed);
     free(new_removed);
     
-    //if x eliminated -> propagate top level
+    //if x eliminated -> propagate top level -> strengthened!
     if (datasize(to_remove) != 0) {
         new_removed = propagate_top_level(occurences_pos, occurences_neg, ptr_strength, ptr_touched);
         to_remove = add_set_to_set(to_remove, new_removed);
@@ -918,8 +907,6 @@ int* maybe_eliminate(int var, int** occurences_pos, int** occurences_neg, int** 
 //top-level propagation will - strengthen clauses, remove clauses - need strenghtened list
 //really needs list of occurences
 //will use information about clauses of size 1
-
-
 int* propagate_top_level(int** occurences_pos, int** occurences_neg, int** ptr_strength, int** ptr_touched) {
     int* to_remove = malloc(sizeof(int));
     to_remove[0] = 0;
@@ -1155,8 +1142,11 @@ int assign(int variable_id, int decision_level, int assignment) {
 //NECESSARY CLEAN-UP FOR BACKTRACKING IS DONE HERE
 void unassign(int decision_level) {
     
+    //INCREMENT VSIDS FOR VARIABLES THAT PRODUCED CONFLICT
+    decay_counter++;
+
     //PERIODICALLY DECAY VSIDS
-    if (decay_counter == 12) {
+    if (decay_counter == 50) {
         for (int i = 1; i <= num_variables; i++) {
             variables[i].vsids /= 2;
         }
@@ -1165,6 +1155,7 @@ void unassign(int decision_level) {
     
     //ERASE ASSIGNMENT
     for (int i = 1; i <= abs(implications[decision_level][0]); i++) {
+        variables[implications[decision_level][i]].vsids++;
         variables[implications[decision_level][i]].assignment = -1;
         variables[implications[decision_level][i]].decision_level = -1;
         variables[implications[decision_level][i]].antecedent = -1;
@@ -1285,12 +1276,6 @@ int replace_watched(int to_visit, int to_replace, int decision_level) {
     
     int backtrack_levels = max_exc_current - decision_level;
     
-    //INCREMENT VSIDS FOR VARIABLES IN NEW CLAUSE
-    decay_counter++;
-    for (int i = 0; i < learned_clause->size; i++) {
-        int var_to_increment = abs(learned_clause->literals[i]);
-        variables[var_to_increment].vsids++;
-    }
     
     //ADD NEWLY LEARNED CLAUSE TO GLOBAL DATABASE
     num_learned++;
