@@ -1,11 +1,10 @@
-*.xcodeproj/*
+# macOS
 .DS_Store
 .Trashes
 
-*.pbxuser
-*.mode1v3
-*.mode2v3
-*.perspectivev3
-*.xcuserstate
-project.xcworkspace/
-xcuserdata/
+# vim
+*.swp
+
+# build products
+*.o
+somesat
