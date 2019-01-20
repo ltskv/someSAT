@@ -1,21 +1,17 @@
-CC=clang
-CFLAGS=-c -g -std=c99
+CFLAGS=--std=c99 -O3
 
 NAME=somesat
 OBJS=main.o
 
-PREFIX=HOME/.usr
+PREFIX=$(HOME)/.usr
 
 all: $(NAME)
 
-main.o: main.c
-	$(CC) $(CFLAGS) main.c
-
-$(NAME): $(OBJS)
-	$(CC) $(OBJS) -o $(NAME)
+$(NAME): main.c
+	$(CC) $(CFLAGS) -o $(NAME) main.c
 
 clean:
-	rm *.o $(NAME)
+	rm $(NAME)
 
 install:
 	cp $(NAME) $(PREFIX)/bin/$(NAME)
